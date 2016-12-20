@@ -215,22 +215,33 @@ class EnvironmentModel(six.with_metaclass(SingletonMeta, object)):
 
     @property
     def d_env(self):
-        if self._virt_env is None:
-            if not self._config:
-                try:
-                    return Environment.get(name=settings.ENV_NAME)
-                except Exception:
-                    self._virt_env = Environment.describe_environment(
-                        boot_from=settings.ADMIN_BOOT_DEVICE)
-                    self._virt_env.define()
+        if self._virt_env is not None:
+            return self._virt_env
+
+        env_name = settings.ENV_NAME if not self._config else \
+            self._config['template']['devops_settings']['env_name']
+
+        try:
+            from devops.error import DevopsObjNotFound
+            EnvDoesNotExist = DevopsObjNotFound
+        except ImportError:
+            # pylint: disable=no-member
+            EnvDoesNotExist = Environment.DoesNotExist
+            # pylint: enable=no-member
+
+        try:
+            logger.info("Try to find environment '{0}'".format(env_name))
+            self._virt_env = Environment.get(name=env_name)
+        except EnvDoesNotExist:
+            logger.info("Try to create environment '{0}'".format(env_name))
+            if self._config:
+                self._virt_env = Environment.create_environment(
+                    full_config=self._config)
             else:
-                try:
-                    return Environment.get(name=self._config[
-                        'template']['devops_settings']['env_name'])
-                except Exception:
-                    self._virt_env = Environment.create_environment(
-                        full_config=self._config)
-                    self._virt_env.define()
+                self._virt_env = Environment.describe_environment(
+                    boot_from=settings.ADMIN_BOOT_DEVICE)
+            self._virt_env.define()
+            logger.info("New environment '{0}' was defined".format(env_name))
         return self._virt_env
 
     def resume_environment(self):
@@ -638,43 +649,6 @@ class EnvironmentModel(six.with_metaclass(SingletonMeta, object)):
                         .format(service_name,
                                 remote_status['exit_code'],
                                 remote_status['stdout']))
-
-    def admin_install_updates(self):
-        """Update packages using yum and install updates via
-        update-master-node.sh tool"""
-        logger.info('Searching for python-cudet package')
-
-        search_command = 'yum search python-cudet'
-
-        search_result = self.ssh_manager.check_call(
-            ip=self.ssh_manager.admin_ip,
-            command=search_command)
-
-        assert_true(
-            "Warning: No matches found for: " not in search_result.stderr_str,
-            "python-cudet wasn't found")
-
-        install_command = 'yum install -y python-cudet'
-
-        self.ssh_manager.check_call(
-            ip=self.ssh_manager.admin_ip,
-            command=install_command)
-
-        logger.info('prepare Fuel node for updating')
-        prepare_command = 'update-prepare prepare master'
-
-        self.ssh_manager.check_call(
-            ip=self.ssh_manager.admin_ip,
-            command=prepare_command)
-
-        logger.info('update Fuel node')
-        update_command = 'update-prepare update master'
-
-        self.ssh_manager.check_call(
-            ip=self.ssh_manager.admin_ip,
-            command=update_command)
-
-        logger.info('Update successful')
 
     # Modifies a resolv.conf on the Fuel master node and returns
     # its original content.
